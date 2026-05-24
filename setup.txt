@@ -4,3 +4,12 @@ then you must have aws cli install
 then you should right AWS configure so that it help terrmform to create things in your 
 laptop.
 
+
+FOR clean up
+
+terraform destroy -auto-approve
+rm -r .terraform
+rm .terraform.lock.hcl
+rm terraform.tfstate
+rm terraform.tfstate.backup
+Write-Host "All cleaned up!" -ForegroundColor Green
