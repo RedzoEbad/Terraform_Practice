@@ -1,0 +1,6 @@
+so for setup be just downloadded terraform and then we add path setup in enviorment veriable .
+then we install the terraform exptension hashicorp terrfaomr extension 
+then you must have aws cli install 
+then you should right AWS configure so that it help terrmform to create things in your 
+laptop.
+
