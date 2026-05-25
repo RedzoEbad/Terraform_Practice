@@ -7,12 +7,17 @@ terraform {
   }
 }
 
+
 # Configure the AWS Provider
 provider "aws" {
   region = "eu-north-1"
 }
 
-# Create a VPC
-resource "aws_vpc" "example" {
-  cidr_block = "10.0.0.0/16"
+resource "aws_s3_bucket" "example123" {
+  bucket = "my-tf-test-bucket-124324343254324343434352334"
+
+  tags = {
+    Name        = "My bucket-12344"
+    Environment = "Dev1231234"
+  }
 }
