@@ -17,9 +17,6 @@ provider "aws" {
   region = "eu-north-1"
 }
 
-# -------------------------
-# S3 Bucket (PRIVATE)
-# -------------------------
 resource "aws_s3_bucket" "website" {
   bucket = "my-static-site-123456789jdkshjdsjfksdfsdkjfksdksdhf"
 }
@@ -33,6 +30,14 @@ resource "aws_s3_bucket_public_access_block" "block_public_access" {
   restrict_public_buckets = true
 }
 
+resource "aws_s3_bucket_ownership_controls" "ownership" {
+  bucket = aws_s3_bucket.website.id
+
+  rule {
+    object_ownership = "BucketOwnerEnforced"
+  }
+}
+
 resource "aws_s3_bucket_server_side_encryption_configuration" "encrypt" {
   bucket = aws_s3_bucket.website.id
 
@@ -43,20 +48,14 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "encrypt" {
   }
 }
 
-# -------------------------
-# OAC (Origin Access Control)
-# -------------------------
 resource "aws_cloudfront_origin_access_control" "oac" {
   name                              = "s3-oac"
-  description                       = "OAC for private S3 access"
+  description                       = "OAC for S3 access"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
-  signing_protocol                 = "sigv4"
+  signing_protocol                  = "sigv4"
 }
 
-# -------------------------
-# CloudFront Distribution
-# -------------------------
 resource "aws_cloudfront_distribution" "cdn" {
   enabled = true
 
@@ -65,6 +64,8 @@ resource "aws_cloudfront_distribution" "cdn" {
     origin_id                = "s3-origin"
     origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
   }
+
+  default_root_object = "index.html"
 
   default_cache_behavior {
     target_origin_id       = "s3-origin"
@@ -91,11 +92,10 @@ resource "aws_cloudfront_distribution" "cdn" {
   viewer_certificate {
     cloudfront_default_certificate = true
   }
+
+ 
 }
 
-# -------------------------
-# S3 Bucket Policy (ALLOW ONLY CLOUDFRONT)
-# -------------------------
 resource "aws_s3_bucket_policy" "allow_cloudfront" {
   bucket = aws_s3_bucket.website.id
 
@@ -122,4 +122,15 @@ resource "aws_s3_bucket_policy" "allow_cloudfront" {
       }
     ]
   })
+}
+
+resource "aws_s3_object" "index" {
+  bucket       = aws_s3_bucket.website.id
+  key          = "index.html"
+  source       = "index.html"
+  content_type = "text/html"
+}
+
+output "cloudfront_url" {
+  value = aws_cloudfront_distribution.cdn.domain_name
 }
