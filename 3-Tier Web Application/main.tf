@@ -127,26 +127,42 @@ resource "aws_route_table" "public_rt" {
 }
 
 # =====================================================
-# PRIVATE ROUTE TABLES
+# PRIVATE ROUTE TABLES (AZ AWARE FIX)
 # =====================================================
-resource "aws_route_table" "private_app_rt" {
+resource "aws_route_table" "private_app_rt_az1" {
   vpc_id = aws_vpc.main.id
 
   tags = {
-    Name = "private-app-rt"
+    Name = "private-app-rt-az1"
   }
 }
 
-resource "aws_route_table" "private_db_rt" {
+resource "aws_route_table" "private_app_rt_az2" {
   vpc_id = aws_vpc.main.id
 
   tags = {
-    Name = "private-db-rt"
+    Name = "private-app-rt-az2"
+  }
+}
+
+resource "aws_route_table" "private_db_rt_az1" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "private-db-rt-az1"
+  }
+}
+
+resource "aws_route_table" "private_db_rt_az2" {
+  vpc_id = aws_vpc.main.id
+
+  tags = {
+    Name = "private-db-rt-az2"
   }
 }
 
 # =====================================================
-# EIPS FOR NAT GATEWAYS (ONE PER AZ)
+# EIPS FOR NAT GATEWAYS
 # =====================================================
 resource "aws_eip" "nat_az1" {
   domain = "vpc"
@@ -182,19 +198,31 @@ resource "aws_nat_gateway" "nat_az2" {
 }
 
 # =====================================================
-# ROUTES FOR PRIVATE APP SUBNETS
+# ROUTES (APP TIER FIXED PER AZ)
 # =====================================================
-resource "aws_route" "private_app_default" {
-  route_table_id         = aws_route_table.private_app_rt.id
+resource "aws_route" "app_az1_default" {
+  route_table_id         = aws_route_table.private_app_rt_az1.id
   destination_cidr_block = "0.0.0.0/0"
   nat_gateway_id         = aws_nat_gateway.nat_az1.id
 }
 
+resource "aws_route" "app_az2_default" {
+  route_table_id         = aws_route_table.private_app_rt_az2.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.nat_az2.id
+}
+
 # =====================================================
-# ROUTES FOR PRIVATE DB SUBNETS
+# ROUTES (DB TIER FIXED PER AZ)
 # =====================================================
-resource "aws_route" "private_db_default" {
-  route_table_id         = aws_route_table.private_db_rt.id
+resource "aws_route" "db_az1_default" {
+  route_table_id         = aws_route_table.private_db_rt_az1.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.nat_az1.id
+}
+
+resource "aws_route" "db_az2_default" {
+  route_table_id         = aws_route_table.private_db_rt_az2.id
   destination_cidr_block = "0.0.0.0/0"
   nat_gateway_id         = aws_nat_gateway.nat_az2.id
 }
@@ -214,27 +242,27 @@ resource "aws_route_table_association" "public_az2" {
 
 resource "aws_route_table_association" "app_az1" {
   subnet_id      = aws_subnet.private_app_az1.id
-  route_table_id = aws_route_table.private_app_rt.id
+  route_table_id = aws_route_table.private_app_rt_az1.id
 }
 
 resource "aws_route_table_association" "app_az2" {
   subnet_id      = aws_subnet.private_app_az2.id
-  route_table_id = aws_route_table.private_app_rt.id
+  route_table_id = aws_route_table.private_app_rt_az2.id
 }
 
 resource "aws_route_table_association" "db_az1" {
   subnet_id      = aws_subnet.private_db_az1.id
-  route_table_id = aws_route_table.private_db_rt.id
+  route_table_id = aws_route_table.private_db_rt_az1.id
 }
 
 resource "aws_route_table_association" "db_az2" {
   subnet_id      = aws_subnet.private_db_az2.id
-  route_table_id = aws_route_table.private_db_rt.id
+  route_table_id = aws_route_table.private_db_rt_az2.id
 }
 
-
-
-# WEB TIER SG 
+# =====================================================
+# SECURITY GROUPS (UNCHANGED - CORRECT)
+# =====================================================
 resource "aws_security_group" "web_sg" {
   name        = "web-sg"
   description = "Allow HTTP/HTTPS from internet"
@@ -257,22 +285,12 @@ resource "aws_security_group" "web_sg" {
   }
 
   egress {
-    description = "Allow all outbound"
     from_port   = 0
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
-  tags = {
-    Name = "web-sg"
-  }
 }
-
-
-
-# App Tier SG
-
 
 resource "aws_security_group" "app_sg" {
   name        = "app-sg"
@@ -280,7 +298,6 @@ resource "aws_security_group" "app_sg" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description     = "App traffic from web tier"
     from_port       = 8080
     to_port         = 8080
     protocol        = "tcp"
@@ -293,11 +310,24 @@ resource "aws_security_group" "app_sg" {
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
   }
-
-  tags = {
-    Name = "app-sg"
-  }
 }
 
+resource "aws_security_group" "db_sg" {
+  name        = "db-sg"
+  description = "Allow DB access only from app tier"
+  vpc_id      = aws_vpc.main.id
 
-# DB Tier SG
+  ingress {
+    from_port       = 3306
+    to_port         = 3306
+    protocol        = "tcp"
+    security_groups = [aws_security_group.app_sg.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
