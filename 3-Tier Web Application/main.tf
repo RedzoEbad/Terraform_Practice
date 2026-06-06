@@ -13,6 +13,30 @@ terraform {
   }
 }
 
+resource "aws_s3_bucket_policy" "allow_cloudfront" {
+  bucket = aws_s3_bucket.frontend.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudfront.amazonaws.com"
+        }
+        Action   = "s3:GetObject"
+        Resource = "${aws_s3_bucket.frontend.arn}/*"
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = aws_cloudfront_distribution.frontend_cdn.arn
+          }
+        }
+      }
+    ]
+  })
+}
+
+
 provider "aws" {
   region = "eu-north-1"
 }
@@ -240,17 +264,32 @@ resource "aws_s3_bucket_public_access_block" "frontend_block" {
   restrict_public_buckets = true
 }
 
+
+
+
+resource "aws_cloudfront_origin_access_control" "oac" {
+  name                              = "s3-oac"
+  description                       = "OAC for S3"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                 = "sigv4"
+}
+
+
+
+
 # =====================================================
 # CLOUDFRONT
 # =====================================================
 resource "aws_cloudfront_distribution" "frontend_cdn" {
   enabled = true
 
-  origin {
-    domain_name = aws_s3_bucket.frontend.bucket_regional_domain_name
-    origin_id   = "s3-frontend"
-  }
+ origin {
+  domain_name = aws_s3_bucket.frontend.bucket_regional_domain_name
+  origin_id   = "s3-frontend"
 
+  origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
+}
   default_cache_behavior {
     target_origin_id       = "s3-frontend"
     viewer_protocol_policy = "redirect-to-https"
@@ -290,6 +329,7 @@ output "alb_dns_url" {
 output "cloudfront_url" {
   value = aws_cloudfront_distribution.frontend_cdn.domain_name
 }
+
 
 
 
