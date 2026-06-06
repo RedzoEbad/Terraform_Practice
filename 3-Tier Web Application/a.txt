@@ -1,0 +1,19 @@
+Users
+  ↓
+CloudFront
+  ↓
+S3 (React build files)
+  ↑
+OAC (Origin Access Control)
+
+
+
+Users
+  ↓
+ALB (Public Subnets)
+  ↓
+Auto Scaling Group
+  ↓
+EC2 Backend Instances (Private App Subnets)
+  ↓
+RDS PostgreSQL/MySQL (Private DB Subnets)
