@@ -13,30 +13,6 @@ terraform {
   }
 }
 
-resource "aws_s3_bucket_policy" "allow_cloudfront" {
-  bucket = aws_s3_bucket.frontend.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Principal = {
-          Service = "cloudfront.amazonaws.com"
-        }
-        Action   = "s3:GetObject"
-        Resource = "${aws_s3_bucket.frontend.arn}/*"
-        Condition = {
-          StringEquals = {
-            "AWS:SourceArn" = aws_cloudfront_distribution.frontend_cdn.arn
-          }
-        }
-      }
-    ]
-  })
-}
-
-
 provider "aws" {
   region = "eu-north-1"
 }
@@ -132,7 +108,6 @@ resource "aws_route_table_association" "pub2" {
 # SECURITY GROUPS
 # =====================================================
 
-# ALB SG
 resource "aws_security_group" "alb_sg" {
   name   = "alb-sg"
   vpc_id = aws_vpc.main.id
@@ -152,7 +127,6 @@ resource "aws_security_group" "alb_sg" {
   }
 }
 
-# APP SG
 resource "aws_security_group" "app_sg" {
   name   = "app-sg"
   vpc_id = aws_vpc.main.id
@@ -173,7 +147,7 @@ resource "aws_security_group" "app_sg" {
 }
 
 # =====================================================
-# AMI (FIXED - NO HARD CODE)
+# AMI
 # =====================================================
 data "aws_ami" "amazon_linux" {
   most_recent = true
@@ -185,21 +159,40 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
-# =====================================================
-# EC2 INSTANCE (FIXED)
-# =====================================================
-resource "aws_instance" "web" {
-  ami           = data.aws_ami.amazon_linux.id
-  instance_type = "t3.micro"
 
-  subnet_id = aws_subnet.public_web_az1.id
+# =====================================================
+# EC2 (BACKEND)
+# =====================================================
+resource "aws_instance" "backend" {
+  ami           = "ami-0c02fb55956c7d316"
+  instance_type = "t2.micro"
 
-  vpc_security_group_ids = [
-    aws_security_group.app_sg.id
-  ]
+  subnet_id              = aws_subnet.private_app_az1.id
+  vpc_security_group_ids = [aws_security_group.app_sg.id]
+
+  associate_public_ip_address = false
+
+  user_data = base64encode(<<EOF
+#!/bin/bash
+yum update -y
+
+curl -sL https://rpm.nodesource.com/setup_18.x | bash -
+yum install -y nodejs git
+
+cd /home/ec2-user
+
+git clone https://github.com/RedzoEbad/Terraform_Practice.git app
+
+cd app/3-Tier-Web-Application/backend
+
+npm install
+
+nohup node index.js > app.log 2>&1 &
+EOF
+  )
 
   tags = {
-    Name = "nodejs-app"
+    Name = "backend-ec2"
   }
 }
 
@@ -211,17 +204,29 @@ resource "aws_lb_target_group" "app_tg" {
   port     = 5000
   protocol = "HTTP"
   vpc_id   = aws_vpc.main.id
+
+  health_check {
+    path                = "/health"
+    protocol            = "HTTP"
+    matcher             = "200"
+    interval            = 30
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+  }
 }
 
-
 # =====================================================
-# TARGET GROUP ATTACHEMENT OF EC2 
+# ATTACH WEB EC2
 # =====================================================
-resource "aws_lb_target_group_attachment" "web_attach" {
+resource "aws_lb_target_group_attachment" "backend_attach" {
   target_group_arn = aws_lb_target_group.app_tg.arn
-  target_id        = aws_instance.web.id
+  target_id        = aws_instance.backend.id
   port             = 5000
 }
+
+
+
 # =====================================================
 # ALB
 # =====================================================
@@ -252,7 +257,7 @@ resource "aws_lb_listener" "http" {
 }
 
 # =====================================================
-# S3 FRONTEND (FIXED NAME)
+# S3 FRONTEND
 # =====================================================
 resource "aws_s3_bucket" "frontend" {
   bucket = "my-react-frontend-unique-001-xyz123"
@@ -267,9 +272,9 @@ resource "aws_s3_bucket_public_access_block" "frontend_block" {
   restrict_public_buckets = true
 }
 
-
-
-
+# =====================================================
+# CLOUDFRONT OAC
+# =====================================================
 resource "aws_cloudfront_origin_access_control" "oac" {
   name                              = "s3-oac"
   description                       = "OAC for S3"
@@ -278,21 +283,18 @@ resource "aws_cloudfront_origin_access_control" "oac" {
   signing_protocol                 = "sigv4"
 }
 
-
-
-
 # =====================================================
 # CLOUDFRONT
 # =====================================================
 resource "aws_cloudfront_distribution" "frontend_cdn" {
   enabled = true
 
- origin {
-  domain_name = aws_s3_bucket.frontend.bucket_regional_domain_name
-  origin_id   = "s3-frontend"
+  origin {
+    domain_name              = aws_s3_bucket.frontend.bucket_regional_domain_name
+    origin_id               = "s3-frontend"
+    origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
+  }
 
-  origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
-}
   default_cache_behavior {
     target_origin_id       = "s3-frontend"
     viewer_protocol_policy = "redirect-to-https"
@@ -323,54 +325,31 @@ resource "aws_cloudfront_distribution" "frontend_cdn" {
 }
 
 # =====================================================
-# OUTPUTS
+# NAT GATEWAY
 # =====================================================
-output "alb_dns_url" {
-  value = aws_lb.app_alb.dns_name
-}
-
-output "cloudfront_url" {
-  value = aws_cloudfront_distribution.frontend_cdn.domain_name
-}
-
-
-
-
-
-
-
-
 resource "aws_eip" "nat_eip" {
   domain = "vpc"
 }
 
-
 resource "aws_nat_gateway" "nat" {
   allocation_id = aws_eip.nat_eip.id
+  subnet_id     = aws_subnet.public_web_az1.id
 
-  subnet_id = aws_subnet.public_web_az1.id
-
-  depends_on = [
-    aws_internet_gateway.igw
-  ]
+  depends_on = [aws_internet_gateway.igw]
 }
 
-
+# =====================================================
+# PRIVATE ROUTE TABLE
+# =====================================================
 resource "aws_route_table" "private_rt" {
   vpc_id = aws_vpc.main.id
 }
 
-
-
 resource "aws_route" "private_internet" {
   route_table_id         = aws_route_table.private_rt.id
-
   destination_cidr_block = "0.0.0.0/0"
-
-  nat_gateway_id = aws_nat_gateway.nat.id
+  nat_gateway_id         = aws_nat_gateway.nat.id
 }
-
-
 
 resource "aws_route_table_association" "private_app_az1" {
   subnet_id      = aws_subnet.private_app_az1.id
@@ -382,5 +361,13 @@ resource "aws_route_table_association" "private_app_az2" {
   route_table_id = aws_route_table.private_rt.id
 }
 
+# =====================================================
+# OUTPUTS
+# =====================================================
+output "alb_dns_url" {
+  value = aws_lb.app_alb.dns_name
+}
 
-
+output "cloudfront_url" {
+  value = aws_cloudfront_distribution.frontend_cdn.domain_name
+}
