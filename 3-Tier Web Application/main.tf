@@ -158,8 +158,8 @@ resource "aws_security_group" "app_sg" {
   vpc_id = aws_vpc.main.id
 
   ingress {
-    from_port       = 80
-    to_port         = 80
+    from_port       = 5000
+    to_port         = 5000
     protocol        = "tcp"
     security_groups = [aws_security_group.alb_sg.id]
   }
@@ -192,11 +192,14 @@ resource "aws_instance" "web" {
   ami           = data.aws_ami.amazon_linux.id
   instance_type = "t3.micro"
 
-  subnet_id              = aws_subnet.public_web_az1.id
-  vpc_security_group_ids = [aws_security_group.app_sg.id]
+  subnet_id = aws_subnet.public_web_az1.id
+
+  vpc_security_group_ids = [
+    aws_security_group.app_sg.id
+  ]
 
   tags = {
-    Name = "web-instance"
+    Name = "nodejs-app"
   }
 }
 
@@ -205,7 +208,7 @@ resource "aws_instance" "web" {
 # =====================================================
 resource "aws_lb_target_group" "app_tg" {
   name     = "app-tg"
-  port     = 80
+  port     = 5000
   protocol = "HTTP"
   vpc_id   = aws_vpc.main.id
 }
@@ -217,7 +220,7 @@ resource "aws_lb_target_group" "app_tg" {
 resource "aws_lb_target_group_attachment" "web_attach" {
   target_group_arn = aws_lb_target_group.app_tg.arn
   target_id        = aws_instance.web.id
-  port             = 80
+  port             = 5000
 }
 # =====================================================
 # ALB
@@ -330,6 +333,54 @@ output "cloudfront_url" {
   value = aws_cloudfront_distribution.frontend_cdn.domain_name
 }
 
+
+
+
+
+
+
+
+resource "aws_eip" "nat_eip" {
+  domain = "vpc"
+}
+
+
+resource "aws_nat_gateway" "nat" {
+  allocation_id = aws_eip.nat_eip.id
+
+  subnet_id = aws_subnet.public_web_az1.id
+
+  depends_on = [
+    aws_internet_gateway.igw
+  ]
+}
+
+
+resource "aws_route_table" "private_rt" {
+  vpc_id = aws_vpc.main.id
+}
+
+
+
+resource "aws_route" "private_internet" {
+  route_table_id         = aws_route_table.private_rt.id
+
+  destination_cidr_block = "0.0.0.0/0"
+
+  nat_gateway_id = aws_nat_gateway.nat.id
+}
+
+
+
+resource "aws_route_table_association" "private_app_az1" {
+  subnet_id      = aws_subnet.private_app_az1.id
+  route_table_id = aws_route_table.private_rt.id
+}
+
+resource "aws_route_table_association" "private_app_az2" {
+  subnet_id      = aws_subnet.private_app_az2.id
+  route_table_id = aws_route_table.private_rt.id
+}
 
 
 
