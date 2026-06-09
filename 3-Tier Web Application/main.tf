@@ -17,97 +17,111 @@ provider "aws" {
   region = "eu-north-1"
 }
 
-# =====================================================
-# VPC
-# =====================================================
-resource "aws_vpc" "main" {
-  cidr_block = "10.0.0.0/16"
+# =========================
+# AMI
+# =========================
+data "aws_ami" "al2023" {
+  most_recent = true
+  owners      = ["amazon"]
 
-  tags = {
-    Name = "main-vpc"
+  filter {
+    name   = "name"
+    values = ["al2023-ami-*-x86_64"]
   }
 }
 
-# =====================================================
-# INTERNET GATEWAY
-# =====================================================
+# =========================
+# VPC
+# =========================
+resource "aws_vpc" "main" {
+  cidr_block = "10.20.0.0/16"
+
+  tags = {
+    Name = "clean-vpc"
+  }
+}
+
+# =========================
+# Internet Gateway
+# =========================
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
 }
 
-# =====================================================
+# =========================
 # PUBLIC SUBNETS
-# =====================================================
-resource "aws_subnet" "public_web_az1" {
+# =========================
+resource "aws_subnet" "public1" {
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.1.0/24"
+  cidr_block              = "10.20.1.0/24"
   availability_zone       = "eu-north-1a"
   map_public_ip_on_launch = true
 }
 
-resource "aws_subnet" "public_web_az2" {
+resource "aws_subnet" "public2" {
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.2.0/24"
+  cidr_block              = "10.20.2.0/24"
   availability_zone       = "eu-north-1b"
   map_public_ip_on_launch = true
 }
 
-# =====================================================
-# PRIVATE SUBNETS (APP)
-# =====================================================
-resource "aws_subnet" "private_app_az1" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.11.0/24"
+# =========================
+# PRIVATE SUBNETS
+# =========================
+resource "aws_subnet" "private1" {
+  vpc_id           = aws_vpc.main.id
+  cidr_block       = "10.20.11.0/24"
   availability_zone = "eu-north-1a"
 }
 
-resource "aws_subnet" "private_app_az2" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.12.0/24"
+resource "aws_subnet" "private2" {
+  vpc_id           = aws_vpc.main.id
+  cidr_block       = "10.20.12.0/24"
   availability_zone = "eu-north-1b"
 }
 
-# =====================================================
-# PRIVATE SUBNETS (DB)
-# =====================================================
-resource "aws_subnet" "private_db_az1" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.21.0/24"
-  availability_zone = "eu-north-1a"
-}
-
-resource "aws_subnet" "private_db_az2" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = "10.0.22.0/24"
-  availability_zone = "eu-north-1b"
-}
-
-# =====================================================
-# PUBLIC ROUTE TABLE
-# =====================================================
+# =========================
+# ROUTE TABLE (PUBLIC)
+# =========================
 resource "aws_route_table" "public_rt" {
   vpc_id = aws_vpc.main.id
 
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id  = aws_internet_gateway.igw.id
+    gateway_id = aws_internet_gateway.igw.id
   }
 }
 
 resource "aws_route_table_association" "pub1" {
-  subnet_id      = aws_subnet.public_web_az1.id
+  subnet_id      = aws_subnet.public1.id
   route_table_id = aws_route_table.public_rt.id
 }
 
 resource "aws_route_table_association" "pub2" {
-  subnet_id      = aws_subnet.public_web_az2.id
+  subnet_id      = aws_subnet.public2.id
   route_table_id = aws_route_table.public_rt.id
 }
 
-# =====================================================
-# SECURITY GROUPS
-# =====================================================
+# =========================
+# ROUTE TABLE (PRIVATE - CLEAN)
+# =========================
+resource "aws_route_table" "private_rt" {
+  vpc_id = aws_vpc.main.id
+}
 
+resource "aws_route_table_association" "priv1" {
+  subnet_id      = aws_subnet.private1.id
+  route_table_id = aws_route_table.private_rt.id
+}
+
+resource "aws_route_table_association" "priv2" {
+  subnet_id      = aws_subnet.private2.id
+  route_table_id = aws_route_table.private_rt.id
+}
+
+# =========================
+# SECURITY GROUPS
+# =========================
 resource "aws_security_group" "alb_sg" {
   name   = "alb-sg"
   vpc_id = aws_vpc.main.id
@@ -146,69 +160,83 @@ resource "aws_security_group" "app_sg" {
   }
 }
 
-# =====================================================
-# AMI
-# =====================================================
-data "aws_ami" "amazon_linux" {
-  most_recent = true
-  owners      = ["amazon"]
+# =========================
+# IAM ROLE
+# =========================
+resource "aws_iam_role" "ec2_role" {
+  name = "ec2-ssm-role-clean"
 
-  filter {
-    name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
-  }
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [{
+      Action = "sts:AssumeRole",
+      Effect = "Allow",
+      Principal = {
+        Service = "ec2.amazonaws.com"
+      }
+    }]
+  })
 }
 
+resource "aws_iam_role_policy_attachment" "ssm" {
+  role       = aws_iam_role.ec2_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
 
-# =====================================================
-# EC2 (BACKEND)
-# =====================================================
+resource "aws_iam_instance_profile" "profile" {
+  name = "ec2-profile-clean"
+  role = aws_iam_role.ec2_role.name
+}
+
+# =========================
+# BACKEND EC2 (FIXED → PUBLIC SUBNET)
+# =========================
 resource "aws_instance" "backend" {
-  ami           = "ami-0c02fb55956c7d316"
-  instance_type = "t2.micro"
+  ami           = data.aws_ami.al2023.id
+  instance_type = "t3.micro"
 
-  subnet_id              = aws_subnet.private_app_az1.id
+  subnet_id              = aws_subnet.public1.id
   vpc_security_group_ids = [aws_security_group.app_sg.id]
 
-  associate_public_ip_address = false
+  iam_instance_profile = aws_iam_instance_profile.profile.name
 
-  user_data = base64encode(<<EOF
+  user_data = <<EOF
 #!/bin/bash
-yum update -y
-
-curl -sL https://rpm.nodesource.com/setup_18.x | bash -
-yum install -y nodejs git
+dnf update -y
+dnf install -y git nodejs npm
 
 cd /home/ec2-user
-
 git clone https://github.com/RedzoEbad/Terraform_Practice.git app
 
-cd app/3-Tier-Web-Application/backend
+cd app/3-Tier\ Web\ Application/backend
+
+cat > .env <<EOT
+PORT=5000
+MONGODB_URI=mongodb+srv://Ebadkhan2002:ebad123@cluster1.jt8rzjs.mongodb.net/?appName=blogApp
+NODE_ENV=production
+EOT
 
 npm install
-
-nohup node index.js > app.log 2>&1 &
+nohup node server.js > app.log 2>&1 &
 EOF
-  )
 
   tags = {
-    Name = "backend-ec2"
+    Name = "backend-clean"
   }
 }
 
-# =====================================================
+# =========================
 # TARGET GROUP
-# =====================================================
-resource "aws_lb_target_group" "app_tg" {
-  name     = "app-tg"
+# =========================
+resource "aws_lb_target_group" "tg" {
+  name     = "app-tg-clean"
   port     = 5000
   protocol = "HTTP"
   vpc_id   = aws_vpc.main.id
 
   health_check {
-    path                = "/health"
-    protocol            = "HTTP"
-    matcher             = "200"
+    path                = "/api/todos"
+    matcher             = "200-399"
     interval            = 30
     timeout             = 5
     healthy_threshold   = 2
@@ -216,158 +244,42 @@ resource "aws_lb_target_group" "app_tg" {
   }
 }
 
-# =====================================================
-# ATTACH WEB EC2
-# =====================================================
-resource "aws_lb_target_group_attachment" "backend_attach" {
-  target_group_arn = aws_lb_target_group.app_tg.arn
+resource "aws_lb_target_group_attachment" "attach" {
+  target_group_arn = aws_lb_target_group.tg.arn
   target_id        = aws_instance.backend.id
   port             = 5000
 }
 
-
-
-# =====================================================
+# =========================
 # ALB
-# =====================================================
-resource "aws_lb" "app_alb" {
-  name               = "app-alb"
+# =========================
+resource "aws_lb" "alb" {
+  name               = "app-alb-clean"
   load_balancer_type = "application"
 
   security_groups = [aws_security_group.alb_sg.id]
 
   subnets = [
-    aws_subnet.public_web_az1.id,
-    aws_subnet.public_web_az2.id
+    aws_subnet.public1.id,
+    aws_subnet.public2.id
   ]
 }
 
-# =====================================================
-# LISTENER
-# =====================================================
-resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.app_alb.arn
+resource "aws_lb_listener" "listener" {
+  load_balancer_arn = aws_lb.alb.arn
   port              = 80
   protocol          = "HTTP"
 
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.app_tg.arn
-  }
-}
-
-# =====================================================
-# S3 FRONTEND
-# =====================================================
-resource "aws_s3_bucket" "frontend" {
-  bucket = "my-react-frontend-unique-001-xyz123"
-}
-
-resource "aws_s3_bucket_public_access_block" "frontend_block" {
-  bucket = aws_s3_bucket.frontend.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-# =====================================================
-# CLOUDFRONT OAC
-# =====================================================
-resource "aws_cloudfront_origin_access_control" "oac" {
-  name                              = "s3-oac"
-  description                       = "OAC for S3"
-  origin_access_control_origin_type = "s3"
-  signing_behavior                  = "always"
-  signing_protocol                 = "sigv4"
-}
-
-# =====================================================
-# CLOUDFRONT
-# =====================================================
-resource "aws_cloudfront_distribution" "frontend_cdn" {
-  enabled = true
-
-  origin {
-    domain_name              = aws_s3_bucket.frontend.bucket_regional_domain_name
-    origin_id               = "s3-frontend"
-    origin_access_control_id = aws_cloudfront_origin_access_control.oac.id
+    target_group_arn = aws_lb_target_group.tg.arn
   }
 
-  default_cache_behavior {
-    target_origin_id       = "s3-frontend"
-    viewer_protocol_policy = "redirect-to-https"
-
-    allowed_methods = ["GET", "HEAD"]
-    cached_methods  = ["GET", "HEAD"]
-
-    forwarded_values {
-      query_string = false
-
-      cookies {
-        forward = "none"
-      }
-    }
-  }
-
-  default_root_object = "index.html"
-
-  restrictions {
-    geo_restriction {
-      restriction_type = "none"
-    }
-  }
-
-  viewer_certificate {
-    cloudfront_default_certificate = true
-  }
 }
 
-# =====================================================
-# NAT GATEWAY
-# =====================================================
-resource "aws_eip" "nat_eip" {
-  domain = "vpc"
+output "alb_url" {
+  value = aws_lb.alb.dns_name
 }
-
-resource "aws_nat_gateway" "nat" {
-  allocation_id = aws_eip.nat_eip.id
-  subnet_id     = aws_subnet.public_web_az1.id
-
-  depends_on = [aws_internet_gateway.igw]
-}
-
-# =====================================================
-# PRIVATE ROUTE TABLE
-# =====================================================
-resource "aws_route_table" "private_rt" {
-  vpc_id = aws_vpc.main.id
-}
-
-resource "aws_route" "private_internet" {
-  route_table_id         = aws_route_table.private_rt.id
-  destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = aws_nat_gateway.nat.id
-}
-
-resource "aws_route_table_association" "private_app_az1" {
-  subnet_id      = aws_subnet.private_app_az1.id
-  route_table_id = aws_route_table.private_rt.id
-}
-
-resource "aws_route_table_association" "private_app_az2" {
-  subnet_id      = aws_subnet.private_app_az2.id
-  route_table_id = aws_route_table.private_rt.id
-}
-
-# =====================================================
-# OUTPUTS
-# =====================================================
-output "alb_dns_url" {
-  value = aws_lb.app_alb.dns_name
-}
-
 output "cloudfront_url" {
-  value = aws_cloudfront_distribution.frontend_cdn.domain_name
+  value = aws_cloudfront_distribution.frontend.domain_name
 }
